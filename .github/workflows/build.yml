@@ -19,10 +19,37 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends cmake ninja-build pkg-config gperf libssl-dev zlib1g-dev libcurl4-openssl-dev libgtk-4-dev libadwaita-1-dev libglew-dev libepoxy-dev libdbus-1-dev libfontconfig-dev libpulse-dev libxcursor-dev libxi-dev libxrandr-dev libxinerama-dev xauth xvfb
+      - name: Restore compiled dependencies
+        id: deps
+        uses: actions/cache/restore@v4
+        with:
+          path: build/aui.boot/prefix
+          key: linux-x64-gcc15-bookworm-v1-${{ hashFiles('CMakeLists.txt', 'aui.boot.cmake') }}
       - name: Configure with GCC 15
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DAUIB_LOCAL_CACHE=ON
-      - name: Compile application and tests
-        run: cmake --build build --target kuni Tests
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DAUIB_LOCAL_CACHE=ON -DAUI_APP_PACKAGING=AUI_PORTABLE_TGZ
+      - name: Save compiled dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/aui.boot/prefix
+          key: ${{ steps.deps.outputs.cache-primary-key }}
+      - name: Compile application
+        run: cmake --build build --target kuni
+      - name: Package Linux binary
+        working-directory: build
+        run: |
+          test -x bin/kuni
+          cpack -G TGZ -B packages
+          tar -tzf packages/*.tar.gz | grep -E '(^|/)kuni$'
+      - name: Upload Linux binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: kuni-linux-x86_64
+          path: build/packages/*.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+      - name: Compile tests
+        run: cmake --build build --target Tests
       - name: Run regression tests for this PR
         working-directory: build/bin
         run: xvfb-run -a ./Tests --gtest_filter='AppBaseUnitTest.*Compaction*:SendTelegramMessageTest.SynthesizesAndSendsOneVoiceNoteInOneCall:SendTelegramMessageTest.DisabledVoiceGenerationOmitsSpeechParameter'
