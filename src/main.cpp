@@ -37,6 +37,7 @@
 #include "tools/get_telegram_chats.h"
 #include "tools/react_with_emoji.h"
 #include "tools/search_chats.h"
+#include "telegram/channel_permissions.h"
 #include "tools/search_messages.h"
 #include "tools/view_messages_around.h"
 #include "tools/remove_and_ban_chat.h"
@@ -660,7 +661,9 @@ public:
             }
             return "reply to user";
         }());
-        if (messages.empty()) {
+        const auto supergroup = ITelegramClient::tryCastTo<const td::td_api::chatTypeSupergroup>(*chat->type_);
+        const bool isChannel = supergroup && supergroup->is_channel_;
+        if (messages.empty() && !isChannel) {
             // Kuni sometimes opens random chats?
             // throw AException("Failed to open chat");
 
@@ -741,13 +744,23 @@ public:
 
             // Mirror the official Telegram client behavior: if you open a group chat/channel you haven't joined,
             // you only see a "Join" button (plus the ability to react to messages) instead of a text field.
+            bool canPublish = false;
             if (chat->type_->get_id() == td::td_api::chatTypeBasicGroup::ID ||
                 chat->type_->get_id() == td::td_api::chatTypeSupergroup::ID) {
                 bool isMember = true;
                 try {
-                    auto member = co_await mTelegram->sendQueryWithResult(ITelegramClient::toPtr(td::td_api::getChatMember(
-                        chatId, ITelegramClient::toPtr(td::td_api::messageSenderUser(mTelegram->myId())))));
-                    switch (member->status_->get_id()) {
+                    td::td_api::object_ptr<td::td_api::ChatMemberStatus> status;
+                    if (isChannel) {
+                        auto group = co_await mTelegram->sendQueryWithResult(ITelegramClient::toPtr(
+                            td::td_api::getSupergroup(supergroup->supergroup_id_)));
+                        status = std::move(group->status_);
+                        canPublish = telegram_permissions::canPublishChannelPost(status.get());
+                    } else {
+                        auto member = co_await mTelegram->sendQueryWithResult(ITelegramClient::toPtr(td::td_api::getChatMember(
+                            chatId, ITelegramClient::toPtr(td::td_api::messageSenderUser(mTelegram->myId())))));
+                        status = std::move(member->status_);
+                    }
+                    switch (status ? status->get_id() : 0) {
                         case td::td_api::chatMemberStatusLeft::ID:
                         case td::td_api::chatMemberStatusBanned::ID:
                             isMember = false;
@@ -757,7 +770,7 @@ public:
                     }
                 } catch (const AException& e) {
                     // e.g. USER_NOT_PARTICIPANT - treat as not a member.
-                    isMember = false;
+                    isMember = isChannel; // Unknown channel rights: offer read-only tools.
                 }
 
                 if (!isMember) {
@@ -805,6 +818,10 @@ You are in group chat called \"{}\".
                     if (!static_cast<td::td_api::chatTypeSupergroup&>(*chat->type_).is_channel_) {
                         // lol what?
                         goto basicGroup;
+                    }
+                    if (canPublish) {
+                        result += "\nYou can publish posts in Telegram channel \"{}\" using #send_telegram_message.\n"_format(chat->title_);
+                        break;
                     }
                     result += R"(
 <instructions>

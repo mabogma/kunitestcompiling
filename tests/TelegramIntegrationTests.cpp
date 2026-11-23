@@ -1,3 +1,4 @@
+#include "telegram/channel_permissions.h"
 #include "config.h"
 #include "OpenAIMock.h"
 #include <gmock/gmock.h>
@@ -77,3 +78,23 @@ This media type is not supported
     }
 }
 
+
+TEST(ChannelPermissions, OnlyJoinedOwnerOrAdminWithPostingRightsCanPublish) {
+    using namespace td::td_api;
+    using telegram_permissions::canPublishChannelPost;
+    chatMemberStatusCreator owner;
+    owner.is_member_ = true;
+    EXPECT_TRUE(canPublishChannelPost(&owner));
+    owner.is_member_ = false;
+    EXPECT_FALSE(canPublishChannelPost(&owner));
+    chatMemberStatusAdministrator admin;
+    EXPECT_FALSE(canPublishChannelPost(&admin));
+    admin.rights_ = make_object<chatAdministratorRights>();
+    admin.rights_->can_post_messages_ = false;
+    EXPECT_FALSE(canPublishChannelPost(&admin));
+    admin.rights_->can_post_messages_ = true;
+    EXPECT_TRUE(canPublishChannelPost(&admin));
+    chatMemberStatusMember subscriber;
+    EXPECT_FALSE(canPublishChannelPost(&subscriber));
+    EXPECT_FALSE(canPublishChannelPost(nullptr));
+}
